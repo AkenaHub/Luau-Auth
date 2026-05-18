@@ -90,14 +90,14 @@ app.get('/api/auth/callback', async (req, res) => {
             headers: { authorization: `Bearer ${tokenData.access_token}` }
         });
         const userData = await userResponse.json();
-        
+
         const safeUserObj = {
             id: userData.id,
             username: userData.username,
             avatar: userData.avatar || '',
             isAdmin: ADMIN_IDS.includes(userData.id)
         };
-        
+
         const htmlResponse = `
             <script>
                 localStorage.setItem('sanctuary_user', JSON.stringify(${JSON.stringify(safeUserObj)}));
@@ -199,15 +199,15 @@ app.get('/raw/:projectId/:scriptId', async (req, res) => {
     const { projectId, scriptId } = req.params;
     const { key, hwid } = req.query;
     const acceptHeader = req.headers['accept'] || "";
-    
+
     if (acceptHeader.includes("text/html")) {
         res.type('text/plain');
         return res.send(`print("Script ID: ${scriptId}")`);
     }
-    
+
     const db = readDB();
     const project = db.projects.find(p => p.id === projectId);
-    
+
     let currentIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "UNKNOWN";
     if (typeof currentIp === 'string' && currentIp.includes(',')) {
         currentIp = currentIp.split(',').shift().trim();
@@ -220,7 +220,7 @@ app.get('/raw/:projectId/:scriptId', async (req, res) => {
             if (script.status !== 'Active') {
                 return res.send(`print("This script is no longer working.")`);
             }
-            
+
             let finalLuaCode = `
 local v0 = (getexecutorname and getexecutorname()) or ""
 local v1 = ${script.allowSolaraXeno === true ? "true" : "false"}
@@ -287,13 +287,13 @@ if _authKey ~= "${key}" then
     return
 end\n\n`;
             }
-            
+
             script.executions = (script.executions || 0) + 1;
             if (!script.executionHistory) script.executionHistory = {};
             const today = new Date().toISOString().split('T').shift();
             script.executionHistory[today] = (script.executionHistory[today] || 0) + 1;
             writeDB(db);
-            
+
             if (project.webhookUrl && project.webhookUrl.trim() !== "") {
                 finalLuaCode += `
 pcall(function()
@@ -345,7 +345,7 @@ app.get('/loader/:projectId', (req, res) => {
                 scriptsTable += `    ["Universal"] = "${HOST_URL}/raw/${project.id}/${s.id}",\n`;
             }
         });
-        
+
         let authSnippet = "";
         let callSnippet = `loadstring(game:HttpGet(Script))()`;
 
@@ -353,12 +353,12 @@ app.get('/loader/:projectId', (req, res) => {
             authSnippet = `\nlocal AuthKey = getgenv().script_key or ""\nlocal hw1 = (gethwid and gethwid()) or "nohwid"\nlocal hw2 = game:GetService("RbxAnalyticsService"):GetClientId()\nlocal hwid = hw1 .. "_" .. hw2\n`;
             callSnippet = `loadstring(game:HttpGet(Script .. "?key=" .. AuthKey .. "&hwid=" .. hwid))()`;
         }
-        
+
         let dynamicLoader = `local ProjectId = "${project.id}"\n`;
         dynamicLoader += `local Scripts = {\n${scriptsTable}}\n`;
         dynamicLoader += `local Script = Scripts[tostring(game.GameId)] or Scripts[game.GameId] or Scripts["Universal"]\n`;
         dynamicLoader += `if Script then${authSnippet}\n    ${callSnippet}\nelse\n    warn("Sanctuary: No valid script found for this game.")\nend`;
-        
+
         return res.send(dynamicLoader);
     }
     res.status(404).send(`print("Error: Project not found")`);
@@ -422,7 +422,7 @@ client.on('messageCreate', async message => {
     const content = message.content.toLowerCase();
     const inviteRegex = /(discord\.(gg|com\/invite)\/|dsc\.gg\/|invite\.gg\/)/i;
     const promoRegex = /(youtube\.com\/(c|channel)\/|twitch\.tv\/|onlyfans\.com\/|tiktok\.com\/@|twitter\.com\/)/i;
-    
+
     if (inviteRegex.test(content) || promoRegex.test(content)) {
         await message.delete().catch(() => {});
         const warnMsg = await message.channel.send(`<@${message.author.id}>, posting invites or self-promotion is not allowed!`);
@@ -441,7 +441,7 @@ client.on('messageCreate', async message => {
 setInterval(async () => {
     const db = readDB();
     let needsSave = false;
-    
+
     for (let p of db.projects) {
         if (!p.hwidKeys) continue;
         for (let k of p.hwidKeys) {
@@ -483,11 +483,11 @@ setInterval(async () => {
 
                     const winnerMentions = [];
                     const expiresAt = Date.now() + (gw.keyDays * 24 * 60 * 60 * 1000);
-                    
+
                     for (let wId of winners) {
                         winnerMentions.push(`<@${wId}>`);
                         const newKey = crypto.randomBytes(12).toString('hex').toLowerCase();
-                        
+
                         if (!project.hwidKeys) project.hwidKeys = [];
                         project.hwidKeys.push({
                             key: newKey,
@@ -505,7 +505,7 @@ setInterval(async () => {
                                 const guild = await client.guilds.fetch(gw.guildId);
                                 const member = await guild.members.fetch(wId);
                                 await member.roles.add(project.discordConfig.roleId);
-                            } catch(e) {}
+                            } catch (e) {}
                         }
 
                         try {
@@ -516,14 +516,14 @@ setInterval(async () => {
                                 .setColor(0x4F6CEE)
                                 .setDescription(`Congratulations! You won a **${gw.keyDays} Day** key for **${project.name}**!\n\nYour key has automatically been redeemed to your Discord account, and you have been given the customer role.\n\n**Your Script Loader:**\n\`\`\`lua\n${loaderCode}\n\`\`\``);
                             await user.send({ embeds: [dmEmbed] }).catch(() => {});
-                        } catch(e) {}
+                        } catch (e) {}
                     }
 
                     const winEmbed = new EmbedBuilder()
                         .setTitle(`${EMOJI_TADA} **Giveaway Winners!** ${EMOJI_TADA}`)
                         .setColor(0x10b981)
                         .setDescription(`**Prize:** ${gw.winnersCount}x Key(s) for ${project.name}\n**Winners:** ${winnerMentions.join(', ')}\n\n*Winners have been given the customer role and DMed their scripts automatically!*`);
-                    
+
                     await channel.send({ embeds: [winEmbed] }).catch(() => {});
                 }
 
@@ -533,7 +533,7 @@ setInterval(async () => {
                         new ButtonBuilder().setCustomId('ended_btn').setLabel('Giveaway Ended').setStyle(ButtonStyle.Secondary).setDisabled(true)
                     );
                     await msg.edit({ components: [endedRow] });
-                } catch(e) {}
+                } catch (e) {}
 
             } catch (e) {}
         }
@@ -545,7 +545,7 @@ setInterval(async () => {
 const buildProjectSelect = (customId, interaction, db) => {
     const isGlobalAdmin = ADMIN_IDS.includes(interaction.user.id);
     const userProjects = isGlobalAdmin ? db.projects : db.projects.filter(p => p.ownerId === interaction.user.id);
-    
+
     if (userProjects.length === 0) return null;
 
     const options = userProjects.map(p => ({
@@ -593,7 +593,7 @@ client.on('interactionCreate', async interaction => {
 
             const isGlobalAdmin = ADMIN_IDS.includes(interaction.user.id);
             const isServerOwner = interaction.user.id === interaction.guild.ownerId;
-            
+
             let hasLinkedApiKey = false;
             for (let k in db.apiKeys) {
                 if (db.apiKeys[k].userId === interaction.user.id && Date.now() < db.apiKeys[k].expiresAt) {
@@ -609,10 +609,10 @@ client.on('interactionCreate', async interaction => {
                     try {
                         const member = await interaction.guild.members.fetch(interaction.user.id);
                         if (member.roles.cache.has(adminRoleId)) hasAdminRole = true;
-                    } catch(e){}
+                    } catch (e) {}
                 }
             }
-            
+
             const isAuthorized = isGlobalAdmin || isServerOwner || (hasAdminRole && hasLinkedApiKey);
 
             if (interaction.commandName === 'set_admin_role') {
@@ -627,7 +627,7 @@ client.on('interactionCreate', async interaction => {
                 writeDB(db);
                 return interaction.reply({ content: `${EMOJI_CHECK} Admin role set to ${role}.`, ephemeral: true });
             }
-            
+
             if (!isAuthorized) {
                 const errEmbed = new EmbedBuilder()
                     .setColor(0xEF4444)
@@ -681,8 +681,8 @@ client.on('interactionCreate', async interaction => {
                     const k = (p.hwidKeys || []).find(x => x.key === keyStr);
                     if (k) { k.hwid = null; k.ip = null; k.lastReset = Date.now(); found = true; }
                 });
-                if (found) { 
-                    writeDB(db); 
+                if (found) {
+                    writeDB(db);
                     return interaction.reply({ content: `${EMOJI_CHECK} HWID successfully reset for that key.`, ephemeral: true });
                 }
                 return interaction.reply({ content: "Key not found.", ephemeral: true });
@@ -696,9 +696,9 @@ client.on('interactionCreate', async interaction => {
                     const k = (p.hwidKeys || []).find(x => x.key === keyStr);
                     if (k) { k.expiresAt += (days * 24 * 60 * 60 * 1000); k.roleRemoved = false; found = true; }
                 });
-                if (found) { 
-                    writeDB(db); 
-                    return interaction.reply({ content: `${EMOJI_CHECK} Key successfully extended by **${days}** days.`, ephemeral: true }); 
+                if (found) {
+                    writeDB(db);
+                    return interaction.reply({ content: `${EMOJI_CHECK} Key successfully extended by **${days}** days.`, ephemeral: true });
                 }
                 return interaction.reply({ content: "Key not found.", ephemeral: true });
             }
@@ -706,9 +706,9 @@ client.on('interactionCreate', async interaction => {
             if (interaction.commandName === 'revoke_key') {
                 const keyStr = interaction.options.getString('key').trim();
                 let found = false;
-                db.projects.forEach(async p => {
+                for (const p of db.projects) {
                     const idx = (p.hwidKeys || []).findIndex(x => x.key === keyStr);
-                    if (idx !== -1) { 
+                    if (idx !== -1) {
                         const k = p.hwidKeys[idx];
                         if (k.userId && p.discordConfig && p.discordConfig.roleId) {
                             try {
@@ -717,165 +717,172 @@ client.on('interactionCreate', async interaction => {
                                 await member.roles.remove(p.discordConfig.roleId);
                             } catch (e) {}
                         }
-                        p.hwidKeys.splice(idx, 1); 
-                        found = true; 
+                        p.hwidKeys.splice(idx, 1);
+                        found = true;
+                        break;
                     }
-                });
-                if (found) { 
-                    writeDB(db); 
-                    return interaction.reply({ content: `${EMOJI_TRASH} Key successfully revoked and deleted.`, ephemeral: true }); 
+                }
+                if (found) {
+                    writeDB(db);
+                    return interaction.reply({ content: `${EMOJI_TRASH} Key successfully revoked and deleted.`, ephemeral: true });
                 }
                 return interaction.reply({ content: "Key not found.", ephemeral: true });
             }
         }
 
+        // ─── STRING SELECT MENU ───────────────────────────────────────────────────
         if (interaction.isStringSelectMenu()) {
-            const parts = interaction.customId.split('_');
-            const prefix = parts;
-            
-            if (prefix === 'selectproj') {
-                const action = parts;
-                const projectId = interaction.values;
-                const db = readDB();
-                const project = db.projects.find(p => p.id === projectId);
+            const customId = interaction.customId; // e.g. "selectproj_setuppanel_roleId"
+            const parts = customId.split('_');
+            // parts[0] = "selectproj", parts[1] = action, parts[2..] = extra params
 
-                if (!project) return interaction.update({ content: "Project not found.", components: [] });
+            if (parts[0] !== 'selectproj') return;
 
-                if (action === 'setuppanel') {
-                    const roleId = parts;
-                    project.discordConfig = { guildId: interaction.guildId, roleId: roleId === 'none' ? '' : roleId, channelId: interaction.channelId };
-                    writeDB(db);
-                    
-                    const embed = new EmbedBuilder()
-                        .setTitle(`${project.name} - Script Panel`)
-                        .setColor(0x4F6CEE)
-                        .setDescription("**Script:** Custom Loader\n\nUse the buttons below to manage your account:\n• Redeem your key to link your Discord account\n• Get the script download code\n• Reset your hardware ID\n• View your account statistics");
+            const action = parts[1];                      // FIX: was `parts` (the array)
+            const projectId = interaction.values[0];      // FIX: was `interaction.values` (the array)
+            const db = readDB();
+            const project = db.projects.find(p => p.id === projectId);
 
-                    const row1 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`auth_redeem_${project.id}`).setLabel('Redeem Key').setEmoji("🔑").setStyle(ButtonStyle.Success),
-                        new ButtonBuilder().setCustomId(`auth_stats_${project.id}`).setLabel('Status').setEmoji("📊").setStyle(ButtonStyle.Secondary)
-                    );
-                    const row2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`auth_getscriptembed_${project.id}`).setLabel('Copy Script').setEmoji("📥").setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`auth_getscriptnoembed_${project.id}`).setLabel('Copy Script (No Embed)').setEmoji("📋").setStyle(ButtonStyle.Primary)
-                    );
-                    const row3 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`auth_reset_${project.id}`).setLabel('Reset HWID').setEmoji("🔄").setStyle(ButtonStyle.Danger)
-                    );
+            if (!project) return interaction.update({ content: "Project not found.", components: [] });
 
-                    await interaction.channel.send({ embeds: [embed], components: [row1, row2, row3] });
-                    return interaction.update({ content: `${EMOJI_CHECK} Panel deployed successfully.`, components: [] });
+            if (action === 'setuppanel') {
+                const roleId = parts[2];                  // FIX: was `parts` (the array)
+                project.discordConfig = { guildId: interaction.guildId, roleId: roleId === 'none' ? '' : roleId, channelId: interaction.channelId };
+                writeDB(db);
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`${project.name} - Script Panel`)
+                    .setColor(0x4F6CEE)
+                    .setDescription("**Script:** Custom Loader\n\nUse the buttons below to manage your account:\n• Redeem your key to link your Discord account\n• Get the script download code\n• Reset your hardware ID\n• View your account statistics");
+
+                const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`auth_redeem_${project.id}`).setLabel('Redeem Key').setEmoji("🔑").setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`auth_stats_${project.id}`).setLabel('Status').setEmoji("📊").setStyle(ButtonStyle.Secondary)
+                );
+                const row2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`auth_getscriptembed_${project.id}`).setLabel('Copy Script').setEmoji("📥").setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`auth_getscriptnoembed_${project.id}`).setLabel('Copy Script (No Embed)').setEmoji("📋").setStyle(ButtonStyle.Primary)
+                );
+                const row3 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`auth_reset_${project.id}`).setLabel('Reset HWID').setEmoji("🔄").setStyle(ButtonStyle.Danger)
+                );
+
+                await interaction.channel.send({ embeds: [embed], components: [row1, row2, row3] });
+                return interaction.update({ content: `${EMOJI_CHECK} Panel deployed successfully.`, components: [] });
+            }
+
+            if (action === 'giveaway') {
+                // customId format: selectproj_giveaway_winners_days_duration
+                const winners = parseInt(parts[2]);       // FIX: was `parseInt(parts)` 
+                const keyDays = parseInt(parts[3]);       // FIX: was `parseInt(parts)`
+                const durationMins = parseInt(parts[4]);  // FIX: was `parseInt(parts)`
+
+                const gwId = crypto.randomBytes(8).toString('hex');
+                const endsAt = Date.now() + (durationMins * 60 * 1000);
+                const timestamp = Math.floor(endsAt / 1000);
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`${EMOJI_TADA} **${project.name} Script Giveaway!** ${EMOJI_TADA}`)
+                    .setColor(0x4F6CEE)
+                    .setDescription(`**Prize:** ${winners}x Key(s) (${keyDays} Days)\n**Ends:** <t:${timestamp}:R> (<t:${timestamp}:f>)\n\nClick the button below to enter!`)
+                    .setFooter({ text: "Luau-Auth Giveaways" });
+
+                const rowBtn = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`authgw_join_${gwId}`).setLabel('Join Giveaway').setEmoji("🎉").setStyle(ButtonStyle.Success)
+                );
+
+                const msg = await interaction.channel.send({ embeds: [embed], components: [rowBtn] });
+
+                db.giveaways.push({
+                    id: gwId, messageId: msg.id, channelId: msg.channelId, guildId: msg.guildId,
+                    projectId: project.id, winnersCount: winners, keyDays: keyDays, endsAt: endsAt,
+                    ended: false, participants: []
+                });
+                writeDB(db);
+
+                return interaction.update({ content: `${EMOJI_CHECK} Giveaway deployed successfully!`, components: [] });
+            }
+
+            if (action === 'genkey') {
+                // customId format: selectproj_genkey_days_amount
+                const days = parseInt(parts[2]);          // FIX: was `parseInt(parts)`
+                const amount = parseInt(parts[3]);        // FIX: was `parseInt(parts)`
+                const expiresAt = Date.now() + (days * 24 * 60 * 60 * 1000);
+                if (!project.hwidKeys) project.hwidKeys = [];
+
+                const generated = [];
+                for (let i = 0; i < amount; i++) {
+                    const newKey = crypto.randomBytes(12).toString('hex').toLowerCase();
+                    generated.push(newKey);
+                    project.hwidKeys.push({ key: newKey, createdAt: Date.now(), expiresAt, userId: null, hwid: null, ip: null, roleRemoved: false });
                 }
+                writeDB(db);
 
-                if (action === 'giveaway') {
-                    const winners = parseInt(parts);
-                    const keyDays = parseInt(parts);
-                    const durationMins = parseInt(parts);
-                    
-                    const gwId = crypto.randomBytes(8).toString('hex');
-                    const endsAt = Date.now() + (durationMins * 60 * 1000);
-                    const timestamp = Math.floor(endsAt / 1000);
+                const okEmbed = new EmbedBuilder()
+                    .setTitle(`${EMOJI_CHECK} Generated ${amount} Key(s)`)
+                    .setColor(0x10B981)
+                    .addFields({ name: 'Project', value: project.name, inline: true }, { name: 'Duration', value: `${days} Days`, inline: true });
 
-                    const embed = new EmbedBuilder()
-                        .setTitle(`${EMOJI_TADA} **${project.name} Script Giveaway!** ${EMOJI_TADA}`)
-                        .setColor(0x4F6CEE)
-                        .setDescription(`**Prize:** ${winners}x Key(s) (${keyDays} Days)\n**Ends:** <t:${timestamp}:R> (<t:${timestamp}:f>)\n\nClick the button below to enter!`)
-                        .setFooter({ text: "Luau-Auth Giveaways" });
-
-                    const rowBtn = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`authgw_join_${gwId}`).setLabel('Join Giveaway').setEmoji("🎉").setStyle(ButtonStyle.Success)
-                    );
-
-                    const msg = await interaction.channel.send({ embeds: [embed], components: [rowBtn] });
-
-                    db.giveaways.push({
-                        id: gwId, messageId: msg.id, channelId: msg.channelId, guildId: msg.guildId,
-                        projectId: project.id, winnersCount: winners, keyDays: keyDays, endsAt: endsAt,
-                        ended: false, participants: []
-                    });
-                    writeDB(db);
-
-                    return interaction.update({ content: `${EMOJI_CHECK} Giveaway deployed successfully!`, components: [] });
-                }
-
-                if (action === 'genkey') {
-                    const days = parseInt(parts);
-                    const amount = parseInt(parts);
-                    const expiresAt = Date.now() + (days * 24 * 60 * 60 * 1000);
-                    if (!project.hwidKeys) project.hwidKeys = [];
-                    
-                    const generated = [];
-                    for(let i=0; i<amount; i++) {
-                        const newKey = crypto.randomBytes(12).toString('hex').toLowerCase();
-                        generated.push(newKey);
-                        project.hwidKeys.push({ key: newKey, createdAt: Date.now(), expiresAt, userId: null, hwid: null, ip: null, roleRemoved: false });
-                    }
-                    writeDB(db);
-
-                    const okEmbed = new EmbedBuilder()
-                        .setTitle(`${EMOJI_CHECK} Generated ${amount} Key(s)`)
-                        .setColor(0x10B981)
-                        .addFields({ name: 'Project', value: project.name, inline: true }, { name: 'Duration', value: `${days} Days`, inline: true });
-
-                    if (amount > 15) {
-                        const buffer = Buffer.from(generated.join('\n'), 'utf-8');
-                        const attachment = new AttachmentBuilder(buffer, { name: 'keys.txt' });
-                        okEmbed.setDescription("Keys have been attached in the text file below.");
-                        return interaction.update({ content: "", embeds: [okEmbed], files: [attachment], components: [] });
-                    } else {
-                        const keyList = generated.map(k => `\`${k}\``).join('\n');
-                        okEmbed.setDescription(`**Keys:**\n${keyList}`);
-                        return interaction.update({ content: "", embeds: [okEmbed], components: [] });
-                    }
-                }
-
-                if (action === 'userinfo') {
-                    const targetUserId = parts;
-                    const userKey = (project.hwidKeys || []).find(k => k.userId === targetUserId);
-                    if (!userKey) return interaction.update({ content: `${EMOJI_CROSS} <@${targetUserId}> does not have a key for this project.`, components: [] });
-
-                    const daysLeft = Math.max(0, Math.ceil((userKey.expiresAt - Date.now()) / (1000 * 60 * 60 * 24)));
-                    const statusStr = userKey.hwid ? `Locked to Device (${userKey.hwid.substring(0, 8)}...)` : "Unbound";
-
-                    let targetUsername = "User";
-                    try {
-                        const tUser = await client.users.fetch(targetUserId);
-                        targetUsername = tUser.username;
-                    } catch(e) {}
-
-                    const infoEmbed = new EmbedBuilder()
-                        .setTitle(`User Info: ${targetUsername}`)
-                        .setColor(0x4F6CEE)
-                        .addFields(
-                            { name: "Project", value: project.name, inline: true },
-                            { name: "Key", value: `||${userKey.key}||`, inline: true },
-                            { name: "Days Left", value: `${daysLeft} Days`, inline: true },
-                            { name: "HWID Status", value: statusStr, inline: true }
-                        );
-                    return interaction.update({ content: "", embeds: [infoEmbed], components: [] });
-                }
-
-                if (action === 'clearkeys') {
-                    const initialLength = project.hwidKeys ? project.hwidKeys.length : 0;
-                    if (project.hwidKeys) {
-                        project.hwidKeys = project.hwidKeys.filter(k => {
-                            const isUnused = !k.userId;
-                            const isExpired = Date.now() > k.expiresAt;
-                            return !isUnused && !isExpired; 
-                        });
-                    }
-                    writeDB(db);
-                    const removed = initialLength - (project.hwidKeys ? project.hwidKeys.length : 0);
-                    
-                    const okEmbed = new EmbedBuilder().setColor(0xF59E0B).setDescription(`${EMOJI_BROOM} **Cleared ${removed} unused or expired keys** from ${project.name}.`);
+                if (amount > 15) {
+                    const buffer = Buffer.from(generated.join('\n'), 'utf-8');
+                    const attachment = new AttachmentBuilder(buffer, { name: 'keys.txt' });
+                    okEmbed.setDescription("Keys have been attached in the text file below.");
+                    return interaction.update({ content: "", embeds: [okEmbed], files: [attachment], components: [] });
+                } else {
+                    const keyList = generated.map(k => `\`${k}\``).join('\n');
+                    okEmbed.setDescription(`**Keys:**\n${keyList}`);
                     return interaction.update({ content: "", embeds: [okEmbed], components: [] });
                 }
             }
+
+            if (action === 'userinfo') {
+                // customId format: selectproj_userinfo_userId
+                const targetUserId = parts[2];            // FIX: was `parts` (the array)
+                const userKey = (project.hwidKeys || []).find(k => k.userId === targetUserId);
+                if (!userKey) return interaction.update({ content: `${EMOJI_CROSS} <@${targetUserId}> does not have a key for this project.`, components: [] });
+
+                const daysLeft = Math.max(0, Math.ceil((userKey.expiresAt - Date.now()) / (1000 * 60 * 60 * 24)));
+                const statusStr = userKey.hwid ? `Locked to Device (${userKey.hwid.substring(0, 8)}...)` : "Unbound";
+
+                let targetUsername = "User";
+                try {
+                    const tUser = await client.users.fetch(targetUserId);
+                    targetUsername = tUser.username;
+                } catch (e) {}
+
+                const infoEmbed = new EmbedBuilder()
+                    .setTitle(`User Info: ${targetUsername}`)
+                    .setColor(0x4F6CEE)
+                    .addFields(
+                        { name: "Project", value: project.name, inline: true },
+                        { name: "Key", value: `||${userKey.key}||`, inline: true },
+                        { name: "Days Left", value: `${daysLeft} Days`, inline: true },
+                        { name: "HWID Status", value: statusStr, inline: true }
+                    );
+                return interaction.update({ content: "", embeds: [infoEmbed], components: [] });
+            }
+
+            if (action === 'clearkeys') {
+                const initialLength = project.hwidKeys ? project.hwidKeys.length : 0;
+                if (project.hwidKeys) {
+                    project.hwidKeys = project.hwidKeys.filter(k => {
+                        const isUnused = !k.userId;
+                        const isExpired = Date.now() > k.expiresAt;
+                        return !isUnused && !isExpired;
+                    });
+                }
+                writeDB(db);
+                const removed = initialLength - (project.hwidKeys ? project.hwidKeys.length : 0);
+
+                const okEmbed = new EmbedBuilder().setColor(0xF59E0B).setDescription(`${EMOJI_BROOM} **Cleared ${removed} unused or expired keys** from ${project.name}.`);
+                return interaction.update({ content: "", embeds: [okEmbed], components: [] });
+            }
         }
 
+        // ─── BUTTON ───────────────────────────────────────────────────────────────
         if (interaction.isButton()) {
             const parts = interaction.customId.split('_');
-            const prefix = parts;
+            const prefix = parts[0];                      // FIX: was `parts` (the array)
 
             if (prefix === 'authgw') {
                 try {
@@ -883,7 +890,7 @@ client.on('interactionCreate', async interaction => {
                     const gwId = parts.slice(2).join('_');
                     const db = readDB();
                     const gw = db.giveaways.find(g => g.id === gwId);
-                    
+
                     if (!gw) return interaction.editReply({ content: "Giveaway not found or expired." });
                     if (gw.ended) return interaction.editReply({ content: "Giveaway has ended." });
 
@@ -896,7 +903,7 @@ client.on('interactionCreate', async interaction => {
                             if (member && member.roles.cache.has(project.discordConfig.roleId)) {
                                 return interaction.editReply({ content: "You already have the customer role for this project, so you cannot enter!" });
                             }
-                        } catch(e) {}
+                        } catch (e) {}
                     }
 
                     if (gw.participants.includes(interaction.user.id)) {
@@ -906,15 +913,15 @@ client.on('interactionCreate', async interaction => {
                     gw.participants.push(interaction.user.id);
                     writeDB(db);
                     return interaction.editReply({ content: `${EMOJI_TADA} You have successfully entered the giveaway!` });
-                } catch(e) {
+                } catch (e) {
                     return interaction.editReply({ content: "An error occurred while joining." });
                 }
             }
 
             if (prefix === 'auth') {
-                const action = parts;
+                const action = parts[1];                  // FIX: was `parts` (the array)
                 const projectId = parts.slice(2).join('_');
-                
+
                 const db = readDB();
                 const project = db.projects.find(p => p.id === projectId);
                 if (!project) return interaction.reply({ content: "Project no longer exists.", ephemeral: true });
@@ -975,11 +982,12 @@ client.on('interactionCreate', async interaction => {
             }
         }
 
+        // ─── MODAL SUBMIT ─────────────────────────────────────────────────────────
         if (interaction.isModalSubmit()) {
             const parts = interaction.customId.split('_');
             const prefix = parts.shift();
             const action = parts.shift();
-            
+
             if (prefix !== 'modal') return;
 
             const db = readDB();
@@ -988,7 +996,7 @@ client.on('interactionCreate', async interaction => {
                 await interaction.deferReply({ ephemeral: true });
                 const projectId = parts.join('_');
                 const inputKey = interaction.fields.getTextInputValue('keyInput').replace(/\s+/g, '');
-                
+
                 const project = db.projects.find(p => p.id === projectId);
                 if (!project) return interaction.editReply({ content: "Project no longer exists." });
 
