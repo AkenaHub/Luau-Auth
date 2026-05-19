@@ -23,7 +23,8 @@ const ADMIN_IDS = ["1284247278957367337", "1282859051092414586"];
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const HOST_URL = process.env.HOST_URL;
+const HOST_URL = (process.env.HOST_URL || "").replace(/\/+$/, "");
+if (!HOST_URL) console.error("[ERROR] HOST_URL env var is not set! Loader URLs will be broken.");
 const REDIRECT_URI = `${HOST_URL}/api/auth/callback`;
 
 // Safe Unicode Emojis
@@ -51,7 +52,7 @@ const readDB = () => {
 };
 
 const writeDB = (data) => {
-    try { fs.writeFileSync(dbPath, JSON.stringify(data, null, 2)); } catch (err) {}
+    try { fs.writeFileSync(dbPath, JSON.stringify(data, null, 2)); } catch (err) { console.error("[DB WRITE ERROR]", err.message); }
 };
 
 const requireValidAccess = (req, res, next) => {
@@ -169,7 +170,9 @@ app.get('/api/sync', (req, res) => {
     const isAdmin = ADMIN_IDS.includes(discordId);
     let needsSave = false;
     db.projects.forEach(p => {
-        if (!p.ownerId) { p.ownerId = discordId; needsSave = true; }
+        // Only migrate legacy ownerless projects if we're in admin context
+        // Never auto-assign ownerId to projects that already belong to someone else
+        if (!p.ownerId && isAdmin) { p.ownerId = discordId; needsSave = true; }
         if (p.freeMode === undefined) { p.freeMode = true; needsSave = true; }
         if (p.hwidResetCooldown === undefined) { p.hwidResetCooldown = 24; needsSave = true; }
         if (!p.hwidKeys) { p.hwidKeys = []; needsSave = true; }
@@ -184,11 +187,20 @@ app.post('/api/sync', requireValidAccess, (req, res) => {
     const discordId = req.body.discordId;
     const isAdmin = ADMIN_IDS.includes(discordId);
     if (isAdmin) {
+        // Admins: preserve ownerId of existing projects, stamp missing ones
+        incomingProjects.forEach(p => {
+            if (!p.ownerId) {
+                const existing = db.projects.find(e => e.id === p.id);
+                p.ownerId = existing ? existing.ownerId : discordId;
+            }
+        });
         db.projects = incomingProjects;
     } else {
         const otherUsersProjects = db.projects.filter(p => p.ownerId !== discordId);
+        // Only allow saving projects that actually belong to this user
         const userProjectsToSave = incomingProjects.filter(p => p.ownerId === discordId || !p.ownerId);
-        userProjectsToSave.forEach(p => p.ownerId = discordId);
+        // Always stamp ownerId so they're never ownerless
+        userProjectsToSave.forEach(p => { p.ownerId = discordId; });
         db.projects = [...otherUsersProjects, ...userProjectsToSave];
     }
     writeDB(db);
