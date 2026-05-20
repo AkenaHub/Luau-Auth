@@ -23,7 +23,8 @@ const ADMIN_IDS = ["1284247278957367337", "1282859051092414586"];
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const HOST_URL = process.env.HOST_URL;
+const HOST_URL = (process.env.HOST_URL || "").replace(/\/+$/, "");
+if (!HOST_URL) console.error("[ERROR] HOST_URL env var is not set! Loader URLs will be broken.");
 const REDIRECT_URI = `${HOST_URL}/api/auth/callback`;
 
 // Safe Unicode Emojis
@@ -51,7 +52,7 @@ const readDB = () => {
 };
 
 const writeDB = (data) => {
-    try { fs.writeFileSync(dbPath, JSON.stringify(data, null, 2)); } catch (err) {}
+    try { fs.writeFileSync(dbPath, JSON.stringify(data, null, 2)); } catch (err) { console.error("[DB WRITE ERROR]", err.message); }
 };
 
 const requireValidAccess = (req, res, next) => {
@@ -90,14 +91,14 @@ app.get('/api/auth/callback', async (req, res) => {
             headers: { authorization: `Bearer ${tokenData.access_token}` }
         });
         const userData = await userResponse.json();
-        
+
         const safeUserObj = {
             id: userData.id,
             username: userData.username,
             avatar: userData.avatar || '',
             isAdmin: ADMIN_IDS.includes(userData.id)
         };
-        
+
         const htmlResponse = `
             <script>
                 localStorage.setItem('sanctuary_user', JSON.stringify(${JSON.stringify(safeUserObj)}));
@@ -169,7 +170,9 @@ app.get('/api/sync', (req, res) => {
     const isAdmin = ADMIN_IDS.includes(discordId);
     let needsSave = false;
     db.projects.forEach(p => {
-        if (!p.ownerId) { p.ownerId = discordId; needsSave = true; }
+        // Only migrate legacy ownerless projects if we're in admin context
+        // Never auto-assign ownerId to projects that already belong to someone else
+        if (!p.ownerId && isAdmin) { p.ownerId = discordId; needsSave = true; }
         if (p.freeMode === undefined) { p.freeMode = true; needsSave = true; }
         if (p.hwidResetCooldown === undefined) { p.hwidResetCooldown = 24; needsSave = true; }
         if (!p.hwidKeys) { p.hwidKeys = []; needsSave = true; }
@@ -184,11 +187,20 @@ app.post('/api/sync', requireValidAccess, (req, res) => {
     const discordId = req.body.discordId;
     const isAdmin = ADMIN_IDS.includes(discordId);
     if (isAdmin) {
+        // Admins: preserve ownerId of existing projects, stamp missing ones
+        incomingProjects.forEach(p => {
+            if (!p.ownerId) {
+                const existing = db.projects.find(e => e.id === p.id);
+                p.ownerId = existing ? existing.ownerId : discordId;
+            }
+        });
         db.projects = incomingProjects;
     } else {
         const otherUsersProjects = db.projects.filter(p => p.ownerId !== discordId);
+        // Only allow saving projects that actually belong to this user
         const userProjectsToSave = incomingProjects.filter(p => p.ownerId === discordId || !p.ownerId);
-        userProjectsToSave.forEach(p => p.ownerId = discordId);
+        // Always stamp ownerId so they're never ownerless
+        userProjectsToSave.forEach(p => { p.ownerId = discordId; });
         db.projects = [...otherUsersProjects, ...userProjectsToSave];
     }
     writeDB(db);
@@ -199,15 +211,15 @@ app.get('/raw/:projectId/:scriptId', async (req, res) => {
     const { projectId, scriptId } = req.params;
     const { key, hwid } = req.query;
     const acceptHeader = req.headers['accept'] || "";
-    
+
     if (acceptHeader.includes("text/html")) {
         res.type('text/plain');
         return res.send(`print("Script ID: ${scriptId}")`);
     }
-    
+
     const db = readDB();
     const project = db.projects.find(p => p.id === projectId);
-    
+
     let currentIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "UNKNOWN";
     if (typeof currentIp === 'string' && currentIp.includes(',')) {
         currentIp = currentIp.split(',').shift().trim();
@@ -220,7 +232,7 @@ app.get('/raw/:projectId/:scriptId', async (req, res) => {
             if (script.status !== 'Active') {
                 return res.send(`print("This script is no longer working.")`);
             }
-            
+
             let finalLuaCode = `
 local v0 = (getexecutorname and getexecutorname()) or ""
 local v1 = ${script.allowSolaraXeno === true ? "true" : "false"}
@@ -287,16 +299,14 @@ if _authKey ~= "${key}" then
     return
 end\n\n`;
             }
-            
+
             script.executions = (script.executions || 0) + 1;
             if (!script.executionHistory) script.executionHistory = {};
             const today = new Date().toISOString().split('T').shift();
             script.executionHistory[today] = (script.executionHistory[today] || 0) + 1;
             writeDB(db);
-            
+
             if (project.webhookUrl && project.webhookUrl.trim() !== "") {
-                const serverLinkField = script.showServerLink ? `, { name = "Server Link", value = "\`\`\`lua\\ngame:GetService('TeleportService'):TeleportToPlaceInstance(" .. tostring(game.PlaceId) .. ", '" .. tostring(game.JobId) .. "')\\n\`\`\`", inline = false }` : "";
-                
                 finalLuaCode += `
 pcall(function()
     local request = http_request or syn and syn.request or request
@@ -322,7 +332,7 @@ pcall(function()
                 { name = "Executor", value = executor, inline = false },
                 { name = "Device", value = deviceType, inline = true },
                 { name = "IP Address", value = "${currentIp}", inline = true },
-                { name = "Executions", value = tostring(getgenv().execCount), inline = true }${serverLinkField}
+                { name = "Executions", value = tostring(getgenv().execCount), inline = true }
             }
         }}
     }
@@ -347,7 +357,7 @@ app.get('/loader/:projectId', (req, res) => {
                 scriptsTable += `    ["Universal"] = "${HOST_URL}/raw/${project.id}/${s.id}",\n`;
             }
         });
-        
+
         let authSnippet = "";
         let callSnippet = `loadstring(game:HttpGet(Script))()`;
 
@@ -355,12 +365,12 @@ app.get('/loader/:projectId', (req, res) => {
             authSnippet = `\nlocal AuthKey = getgenv().script_key or ""\nlocal hw1 = (gethwid and gethwid()) or "nohwid"\nlocal hw2 = game:GetService("RbxAnalyticsService"):GetClientId()\nlocal hwid = hw1 .. "_" .. hw2\n`;
             callSnippet = `loadstring(game:HttpGet(Script .. "?key=" .. AuthKey .. "&hwid=" .. hwid))()`;
         }
-        
+
         let dynamicLoader = `local ProjectId = "${project.id}"\n`;
         dynamicLoader += `local Scripts = {\n${scriptsTable}}\n`;
         dynamicLoader += `local Script = Scripts[tostring(game.GameId)] or Scripts[game.GameId] or Scripts["Universal"]\n`;
         dynamicLoader += `if Script then${authSnippet}\n    ${callSnippet}\nelse\n    warn("Sanctuary: No valid script found for this game.")\nend`;
-        
+
         return res.send(dynamicLoader);
     }
     res.status(404).send(`print("Error: Project not found")`);
@@ -424,7 +434,7 @@ client.on('messageCreate', async message => {
     const content = message.content.toLowerCase();
     const inviteRegex = /(discord\.(gg|com\/invite)\/|dsc\.gg\/|invite\.gg\/)/i;
     const promoRegex = /(youtube\.com\/(c|channel)\/|twitch\.tv\/|onlyfans\.com\/|tiktok\.com\/@|twitter\.com\/)/i;
-    
+
     if (inviteRegex.test(content) || promoRegex.test(content)) {
         await message.delete().catch(() => {});
         const warnMsg = await message.channel.send(`<@${message.author.id}>, posting invites or self-promotion is not allowed!`);
@@ -443,7 +453,7 @@ client.on('messageCreate', async message => {
 setInterval(async () => {
     const db = readDB();
     let needsSave = false;
-    
+
     for (let p of db.projects) {
         if (!p.hwidKeys) continue;
         for (let k of p.hwidKeys) {
@@ -485,11 +495,11 @@ setInterval(async () => {
 
                     const winnerMentions = [];
                     const expiresAt = Date.now() + (gw.keyDays * 24 * 60 * 60 * 1000);
-                    
+
                     for (let wId of winners) {
                         winnerMentions.push(`<@${wId}>`);
                         const newKey = crypto.randomBytes(12).toString('hex').toLowerCase();
-                        
+
                         if (!project.hwidKeys) project.hwidKeys = [];
                         project.hwidKeys.push({
                             key: newKey,
@@ -507,7 +517,7 @@ setInterval(async () => {
                                 const guild = await client.guilds.fetch(gw.guildId);
                                 const member = await guild.members.fetch(wId);
                                 await member.roles.add(project.discordConfig.roleId);
-                            } catch(e) {}
+                            } catch (e) {}
                         }
 
                         try {
@@ -518,14 +528,14 @@ setInterval(async () => {
                                 .setColor(0x4F6CEE)
                                 .setDescription(`Congratulations! You won a **${gw.keyDays} Day** key for **${project.name}**!\n\nYour key has automatically been redeemed to your Discord account, and you have been given the customer role.\n\n**Your Script Loader:**\n\`\`\`lua\n${loaderCode}\n\`\`\``);
                             await user.send({ embeds: [dmEmbed] }).catch(() => {});
-                        } catch(e) {}
+                        } catch (e) {}
                     }
 
                     const winEmbed = new EmbedBuilder()
                         .setTitle(`${EMOJI_TADA} **Giveaway Winners!** ${EMOJI_TADA}`)
                         .setColor(0x10b981)
                         .setDescription(`**Prize:** ${gw.winnersCount}x Key(s) for ${project.name}\n**Winners:** ${winnerMentions.join(', ')}\n\n*Winners have been given the customer role and DMed their scripts automatically!*`);
-                    
+
                     await channel.send({ embeds: [winEmbed] }).catch(() => {});
                 }
 
@@ -535,7 +545,7 @@ setInterval(async () => {
                         new ButtonBuilder().setCustomId('ended_btn').setLabel('Giveaway Ended').setStyle(ButtonStyle.Secondary).setDisabled(true)
                     );
                     await msg.edit({ components: [endedRow] });
-                } catch(e) {}
+                } catch (e) {}
 
             } catch (e) {}
         }
@@ -547,7 +557,7 @@ setInterval(async () => {
 const buildProjectSelect = (customId, interaction, db) => {
     const isGlobalAdmin = ADMIN_IDS.includes(interaction.user.id);
     const userProjects = isGlobalAdmin ? db.projects : db.projects.filter(p => p.ownerId === interaction.user.id);
-    
+
     if (userProjects.length === 0) return null;
 
     const options = userProjects.map(p => ({
@@ -595,7 +605,7 @@ client.on('interactionCreate', async interaction => {
 
             const isGlobalAdmin = ADMIN_IDS.includes(interaction.user.id);
             const isServerOwner = interaction.user.id === interaction.guild.ownerId;
-            
+
             let hasLinkedApiKey = false;
             for (let k in db.apiKeys) {
                 if (db.apiKeys[k].userId === interaction.user.id && Date.now() < db.apiKeys[k].expiresAt) {
@@ -611,10 +621,10 @@ client.on('interactionCreate', async interaction => {
                     try {
                         const member = await interaction.guild.members.fetch(interaction.user.id);
                         if (member.roles.cache.has(adminRoleId)) hasAdminRole = true;
-                    } catch(e){}
+                    } catch (e) {}
                 }
             }
-            
+
             const isAuthorized = isGlobalAdmin || isServerOwner || (hasAdminRole && hasLinkedApiKey);
 
             if (interaction.commandName === 'set_admin_role') {
@@ -629,7 +639,7 @@ client.on('interactionCreate', async interaction => {
                 writeDB(db);
                 return interaction.reply({ content: `${EMOJI_CHECK} Admin role set to ${role}.`, ephemeral: true });
             }
-            
+
             if (!isAuthorized) {
                 const errEmbed = new EmbedBuilder()
                     .setColor(0xEF4444)
@@ -736,19 +746,20 @@ client.on('interactionCreate', async interaction => {
         if (interaction.isStringSelectMenu()) {
             const customId = interaction.customId; // e.g. "selectproj_setuppanel_roleId"
             const parts = customId.split('_');
-            // parts = "selectproj", parts = action, parts[2..] = extra params
+            // parts[0] = "selectproj", parts[1] = action, parts[2..] = extra params
 
-            if (parts !== 'selectproj') return;
+            if (parts[0] !== 'selectproj') return;
 
-            const action = parts;                      // FIX: was `parts` (the array)
-            const projectId = interaction.values;      // FIX: was `interaction.values` (the array)
+            const action = parts[1];                      // FIX: was `parts` (the array)
+            const projectId = interaction.values[0];      // FIX: was `interaction.values` (the array)
             const db = readDB();
             const project = db.projects.find(p => p.id === projectId);
 
             if (!project) return interaction.update({ content: "Project not found.", components: [] });
 
             if (action === 'setuppanel') {
-                const roleId = parts;                  // FIX: was `parts` (the array)
+                await interaction.deferUpdate();
+                const roleId = parts[2];
                 project.discordConfig = { guildId: interaction.guildId, roleId: roleId === 'none' ? '' : roleId, channelId: interaction.channelId };
                 writeDB(db);
 
@@ -770,14 +781,15 @@ client.on('interactionCreate', async interaction => {
                 );
 
                 await interaction.channel.send({ embeds: [embed], components: [row1, row2, row3] });
-                return interaction.update({ content: `${EMOJI_CHECK} Panel deployed successfully.`, components: [] });
+                return interaction.editReply({ content: `${EMOJI_CHECK} Panel deployed successfully.`, components: [] });
             }
 
             if (action === 'giveaway') {
+                await interaction.deferUpdate();
                 // customId format: selectproj_giveaway_winners_days_duration
-                const winners = parseInt(parts);       // FIX: was `parseInt(parts)` 
-                const keyDays = parseInt(parts);       // FIX: was `parseInt(parts)`
-                const durationMins = parseInt(parts);  // FIX: was `parseInt(parts)`
+                const winners = parseInt(parts[2]);       // FIX: was `parseInt(parts)` 
+                const keyDays = parseInt(parts[3]);       // FIX: was `parseInt(parts)`
+                const durationMins = parseInt(parts[4]);  // FIX: was `parseInt(parts)`
 
                 const gwId = crypto.randomBytes(8).toString('hex');
                 const endsAt = Date.now() + (durationMins * 60 * 1000);
@@ -802,13 +814,14 @@ client.on('interactionCreate', async interaction => {
                 });
                 writeDB(db);
 
-                return interaction.update({ content: `${EMOJI_CHECK} Giveaway deployed successfully!`, components: [] });
+                return interaction.editReply({ content: `${EMOJI_CHECK} Giveaway deployed successfully!`, components: [] });
             }
 
             if (action === 'genkey') {
+                await interaction.deferUpdate();
                 // customId format: selectproj_genkey_days_amount
-                const days = parseInt(parts);          // FIX: was `parseInt(parts)`
-                const amount = parseInt(parts);        // FIX: was `parseInt(parts)`
+                const days = parseInt(parts[2]);          // FIX: was `parseInt(parts)`
+                const amount = parseInt(parts[3]);        // FIX: was `parseInt(parts)`
                 const expiresAt = Date.now() + (days * 24 * 60 * 60 * 1000);
                 if (!project.hwidKeys) project.hwidKeys = [];
 
@@ -829,17 +842,18 @@ client.on('interactionCreate', async interaction => {
                     const buffer = Buffer.from(generated.join('\n'), 'utf-8');
                     const attachment = new AttachmentBuilder(buffer, { name: 'keys.txt' });
                     okEmbed.setDescription("Keys have been attached in the text file below.");
-                    return interaction.update({ content: "", embeds: [okEmbed], files: [attachment], components: [] });
+                    return interaction.editReply({ content: "", embeds: [okEmbed], files: [attachment], components: [] });
                 } else {
                     const keyList = generated.map(k => `\`${k}\``).join('\n');
                     okEmbed.setDescription(`**Keys:**\n${keyList}`);
-                    return interaction.update({ content: "", embeds: [okEmbed], components: [] });
+                    return interaction.editReply({ content: "", embeds: [okEmbed], components: [] });
                 }
             }
 
             if (action === 'userinfo') {
+                await interaction.deferUpdate();
                 // customId format: selectproj_userinfo_userId
-                const targetUserId = parts;            // FIX: was `parts` (the array)
+                const targetUserId = parts[2];            // FIX: was `parts` (the array)
                 const userKey = (project.hwidKeys || []).find(k => k.userId === targetUserId);
                 if (!userKey) return interaction.update({ content: `${EMOJI_CROSS} <@${targetUserId}> does not have a key for this project.`, components: [] });
 
@@ -861,10 +875,11 @@ client.on('interactionCreate', async interaction => {
                         { name: "Days Left", value: `${daysLeft} Days`, inline: true },
                         { name: "HWID Status", value: statusStr, inline: true }
                     );
-                return interaction.update({ content: "", embeds: [infoEmbed], components: [] });
+                return interaction.editReply({ content: "", embeds: [infoEmbed], components: [] });
             }
 
             if (action === 'clearkeys') {
+                await interaction.deferUpdate();
                 const initialLength = project.hwidKeys ? project.hwidKeys.length : 0;
                 if (project.hwidKeys) {
                     project.hwidKeys = project.hwidKeys.filter(k => {
@@ -877,14 +892,14 @@ client.on('interactionCreate', async interaction => {
                 const removed = initialLength - (project.hwidKeys ? project.hwidKeys.length : 0);
 
                 const okEmbed = new EmbedBuilder().setColor(0xF59E0B).setDescription(`${EMOJI_BROOM} **Cleared ${removed} unused or expired keys** from ${project.name}.`);
-                return interaction.update({ content: "", embeds: [okEmbed], components: [] });
+                return interaction.editReply({ content: "", embeds: [okEmbed], components: [] });
             }
         }
 
         // ─── BUTTON ───────────────────────────────────────────────────────────────
         if (interaction.isButton()) {
             const parts = interaction.customId.split('_');
-            const prefix = parts;                      // FIX: was `parts` (the array)
+            const prefix = parts[0];                      // FIX: was `parts` (the array)
 
             if (prefix === 'authgw') {
                 try {
@@ -921,7 +936,7 @@ client.on('interactionCreate', async interaction => {
             }
 
             if (prefix === 'auth') {
-                const action = parts;                  // FIX: was `parts` (the array)
+                const action = parts[1];                  // FIX: was `parts` (the array)
                 const projectId = parts.slice(2).join('_');
 
                 const db = readDB();
